@@ -1,0 +1,18 @@
+{application, polynya_cluster,
+ [
+  {description, ""},
+  {vsn, "0.0.1a"},
+  {registered, [cluster]},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  sasl,
+                  crypto,
+                  public_key,
+                  ssl,
+                  ibrowse,
+                  couchbeam
+                 ]},
+  {mod, { polynya_cluster_app, []}},
+  {env, []}
+ ]}.
