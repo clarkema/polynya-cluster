@@ -22,7 +22,7 @@
 %%% ----------------------------------------------------------------------
 -module(utils).
 -include_lib("eunit/include/eunit.hrl").
--export([explode/2, butlast/1, cluster_date_to_iso/1]).
+-export([explode/2, butlast/1, cluster_dt_to_iso/2]).
 
 %% -----------------------------------------------------------------------
 %% @doc Separate a PC protocol sentence into its fields.
@@ -64,15 +64,18 @@ butlast_test_() -> [
 ].
 
 %% -----------------------------------------------------------------------
-%% @doc Convert a PC protocol date to ISO 8601 basic format.
--spec cluster_date_to_iso(string()) -> string().
-cluster_date_to_iso(String) ->
+%% @doc Convert a PC protocol date and time to ISO 8601 basic format.
+-spec cluster_dt_to_iso(string(), string()) -> string().
+cluster_dt_to_iso(Date, Time) ->
     MonthNumbers = [{"Jan", "01"}, {"Feb", "02"}, {"Mar", "03"}, {"Apr", "04"},
                     {"May", "05"}, {"Jun", "06"}, {"Jul", "07"}, {"Aug", "08"},
                     {"Sep", "09"}, {"Oct", "10"}, {"Nov", "09"}, {"Dec", "12"}],
 
-    [Day, Month, Year] = string:tokens(string:strip(String), "-"),
+    [Day, Month, Year] = string:tokens(string:strip(Date), "-"),
+    Hour = string:substr(Time, 1, 2),
+    Min  = string:substr(Time, 3, 2),
+
     {_Name, Num} = proplists:lookup(Month, MonthNumbers),
-    io_lib:format("~s~s~2..0s",
-        [Year, Num, Day]).
+    io_lib:format("~s~s~2..0sT~s~sZ",
+        [Year, Num, Day, Hour, Min]).
 

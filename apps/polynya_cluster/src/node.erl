@@ -39,7 +39,6 @@
 
 %% @private
 init({cluster, LocalNode, RemoteNode, Host, Port}) ->
-    io:format("Starting up and connecting to ~p port ~p~n", [Host, Port]),
     case gen_tcp:connect(Host, Port, [list, inet, {packet, raw}], 3000) of
         {ok, _Socket} ->
             {ok, #state{localNode=LocalNode,

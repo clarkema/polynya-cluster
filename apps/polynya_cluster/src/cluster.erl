@@ -68,18 +68,24 @@ init(_Args) ->
 handle_call(_Request, _From, State) ->
     {noreply, State}.
 
+sha_hash(Term) ->
+    <<Hash:160/integer>> = crypto:sha(Term),
+    lists:flatten(io_lib:format("~40.16.0b", [Hash])).
+
 spot_to_json(#spot{spotted_call = SpottedCall,
                    spotter_call = SpotterCall,
                    comment      = Comment,
                    time         = Time,
                    date         = Date,
                    qrg          = Qrg}) ->
-    IsoDate = utils:cluster_date_to_iso(Date),
-    {[{<<"spotted_call">>, list_to_bitstring(SpottedCall)},
+    IsoDateTime = utils:cluster_dt_to_iso(Date, Time),
+    Hash = sha_hash( [IsoDateTime, SpottedCall,
+                      SpotterCall, Qrg, Comment ]),
+    {[{<<"_id">>,          list_to_bitstring(Hash)},
+      {<<"spotted_call">>, list_to_bitstring(SpottedCall)},
       {<<"spotter_call">>, list_to_bitstring(SpotterCall)},
       {<<"comment">>,      list_to_bitstring(Comment)    },
-      {<<"time">>,         list_to_bitstring(Time)       },
-      {<<"date">>,         list_to_bitstring(IsoDate)    },
+      {<<"datetime">>,     list_to_bitstring(IsoDateTime)},
       {<<"qrg">>,          list_to_bitstring(Qrg)}]}.
 %% @private
 handle_cast({receive_spot, Text}, #state{spotdb=SpotDB}=State) ->
