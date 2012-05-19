@@ -84,7 +84,7 @@ spot_to_json(#spot{spotted_call = SpottedCall,
     {[{<<"_id">>,          list_to_bitstring(Hash)},
       {<<"spotted_call">>, list_to_bitstring(SpottedCall)},
       {<<"spotter_call">>, list_to_bitstring(SpotterCall)},
-      {<<"comment">>,      list_to_bitstring(Comment)    },
+      {<<"comment">>,      unicode:characters_to_binary(Comment) },
       {<<"datetime">>,     list_to_bitstring(IsoDateTime)},
       {<<"qrg">>,          list_to_bitstring(Qrg)}]}.
 %% @private
