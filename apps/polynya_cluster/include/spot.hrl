@@ -1,2 +1,2 @@
--record(spot, {spotted_call, spotter_call, comment, time, date, qrg}).
+-record(spot, {spotted_call, spotter_call, comment, time, date, qrg, iota}).
 -type spot() :: #spot{}.

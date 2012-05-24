@@ -279,12 +279,17 @@ parse_pc11(Data) ->
         [_, Qrg, SpottedCall, Date, Time, Comment, SpotterCall|_] ->
             %% Remove any SSID from the SpotterCall
             BareCall = hd(string:tokens(SpotterCall, "-")),
+            Iota = case parse_iota(Comment) of
+                none -> "";
+                Ref -> Ref
+            end,
             #spot{spotted_call = SpottedCall,
                   spotter_call = BareCall,
                   comment      = Comment,
                   time         = Time,
                   date         = Date,
-                  qrg          = utils:normalise_qrg(Qrg)};
+                  qrg          = utils:normalise_qrg(Qrg),
+                  iota         = Iota};
         _ -> throw(bad_parse)
     end.
 
@@ -294,3 +299,25 @@ parse_pc11_test_() -> [
     ?_test(parse_pc11("PC11^f^dx^date^time^comment^spotter^src^ip^hops")),
     ?_assertThrow(bad_parse, parse_pc11("Badness"))
 ].
+
+%% -----------------------------------------------------------------------
+%% @doc Parse an IOTA reference out of random text.
+-spec parse_iota(string()) -> string().
+parse_iota(String) ->
+    UString = string:to_upper(String),
+    case re:run(UString, iota_regexp(), [{capture, ['CONT', 'NUM'], list}]) of
+        {match, [C,N]} -> io_lib:format("~s-~3..0s", [C, N]);
+        nomatch -> none
+    end.
+
+%% @hidden
+parse_iota_test_() -> [
+    ?_assertEqual(lists:flatten(parse_iota("EU-023")), "EU-023"),
+    ?_assertEqual(lists:flatten(parse_iota("EU023")), "EU-023"),
+    ?_assertEqual(lists:flatten(parse_iota("as023")), "AS-023"),
+    ?_assertEqual(lists:flatten(parse_iota("aF23")), "AF-023")
+].
+
+iota_regexp() ->
+    {ok, Pat} = re:compile("(?<CONT>EU|NA|SA|AS|AF)-?(?<NUM>\\d{2,3})"),
+    Pat.
