@@ -24,9 +24,12 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-%    {ok, {{one_for_one, 5, 10}, [
-    {ok, {{one_for_one, 1, 10}, [
+    {ok, Links} = application:get_env(polynya_cluster, links),
+    Children = [
         ?CHILD(cluster, worker),
-        ?CHILD(unique_id_server, worker),
-        ?CHILD(node, worker)
-    ]}}.
+        ?CHILD(unique_id_server, worker)
+    ] ++ [ childspec(P) || P <- Links ],
+    {ok, {{one_for_one, 5, 10}, Children}}.
+
+childspec({peer, _, PeerCall, _, _, _} = Peer) ->
+    {PeerCall, {node, start_link, [Peer]}, temporary, 5000, worker, [node]}.

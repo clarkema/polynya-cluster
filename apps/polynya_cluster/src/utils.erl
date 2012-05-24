@@ -22,7 +22,7 @@
 %%% ----------------------------------------------------------------------
 -module(utils).
 -include_lib("eunit/include/eunit.hrl").
--export([explode/2, butlast/1, cluster_dt_to_iso/2]).
+-export([explode/2, butlast/1, cluster_dt_to_iso/2, normalise_qrg/1]).
 
 %% -----------------------------------------------------------------------
 %% @doc Separate a PC protocol sentence into its fields.
@@ -79,3 +79,16 @@ cluster_dt_to_iso(Date, Time) ->
     io_lib:format("~s~s~2..0sT~s~sZ",
         [Year, Num, Day, Hour, Min]).
 
+%% -----------------------------------------------------------------------
+%% @doc Normalise a frequency for comparison and display.
+-spec normalise_qrg(string()) -> string().
+normalise_qrg(Qrg) ->
+    {F, _Rest} = string:to_float(Qrg),
+    io_lib:format("~.1f", [F]).
+
+%% @hidden
+normalise_qrg_test_() -> [
+    ?_assertEqual(lists:flatten(normalise_qrg("14260")), "14260.0"),
+    ?_assertEqual(lists:flatten(normalise_qrg("14260.0")), "14260.0"),
+    ?_assertEqual(lists:flatten(normalise_qrg("14260.10")), "14260.1")
+].

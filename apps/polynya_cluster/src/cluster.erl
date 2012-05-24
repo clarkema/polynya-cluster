@@ -45,7 +45,7 @@
 
 %% =======================================================================
 %% Module Exports
--export([start_link/0, receive_spot/1, add_nodes/3, delete_nodes/3,
+-export([start_link/0, receive_spot/2, add_nodes/3, delete_nodes/3,
          map/0]).
 
 %% =======================================================================
@@ -54,10 +54,6 @@
 
 %% @private
 init(_Args) ->
-    %Nodes = orddict:new(),
-    %ProxyPid = clusterproxy:connect_new(),
-    %orddict:store(ProxyPid, ProxyPid, Proxies),
-    %loop(#state{proxies=Proxies}).
     ets:new(network, [bag, named_table]),
     Server = couchbeam:server_connection("127.0.0.1", "5984", "", []),
     {ok, _Version} = couchbeam:server_info(Server),
@@ -68,33 +64,13 @@ init(_Args) ->
 handle_call(_Request, _From, State) ->
     {noreply, State}.
 
-sha_hash(Term) ->
-    <<Hash:160/integer>> = crypto:sha(Term),
-    lists:flatten(io_lib:format("~40.16.0b", [Hash])).
-
-spot_to_json(#spot{spotted_call = SpottedCall,
-                   spotter_call = SpotterCall,
-                   comment      = Comment,
-                   time         = Time,
-                   date         = Date,
-                   qrg          = Qrg}) ->
-    IsoDateTime = utils:cluster_dt_to_iso(Date, Time),
-    Hash = sha_hash( [IsoDateTime, SpottedCall,
-                      SpotterCall, Qrg, Comment ]),
-    {[{<<"_id">>,          list_to_bitstring(Hash)},
-      {<<"spotted_call">>, list_to_bitstring(SpottedCall)},
-      {<<"spotter_call">>, list_to_bitstring(SpotterCall)},
-      {<<"comment">>,      unicode:characters_to_binary(Comment) },
-      {<<"datetime">>,     list_to_bitstring(IsoDateTime)},
-      {<<"qrg">>,          list_to_bitstring(Qrg)}]}.
 %% @private
-handle_cast({receive_spot, Text}, #state{spotdb=SpotDB}=State) ->
-    io:format("Spot: ~p~n", [Text]),
-    couchbeam:save_doc(SpotDB, spot_to_json(Text)),
+handle_cast({receive_spot, Text, Source}, #state{spotdb=SpotDB}=State) ->
+    couchbeam:save_doc(SpotDB, spot_to_json(Text, Source)),
     {noreply, State};
 handle_cast({add_nodes, NodeCall, _UniqueId, Calls}, State) ->
     [ets:insert(network, {NodeCall, strip_call(C)})
-        || C <- Calls, nodep(C)],
+        || C <- Calls, node_p(C)],
     {noreply, State};
 handle_cast({delete_nodes, NodeCall, _UniqueId, Calls}, State) ->
     [ets:delete(network, {NodeCall, C}) || C <- Calls],
@@ -126,23 +102,23 @@ start_link() -> gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 %% @doc Process a newly-received spot.
 %% <p>Intended to be called by a node on receipt of a spot, this
 %% will process the spot and add it to the database.</p>
-receive_spot(Spot) ->
-    gen_server:cast(cluster, {receive_spot, Spot}).
+receive_spot(Spot, Source) ->
+    gen_server:cast(cluster, {receive_spot, Spot, Source}).
 
 %% -----------------------------------------------------------------------
-%% @doc 
+%% @doc
 add_nodes(NodeCall, UniqueId, Calls) ->
     gen_server:cast(cluster, {add_nodes, NodeCall, UniqueId, Calls}),
     ok.
 
 %% -----------------------------------------------------------------------
-%% @doc 
+%% @doc
 delete_nodes(NodeCall, UniqueId, Calls) ->
     gen_server:cast(cluster, {delete_nodes, NodeCall, UniqueId, Calls}),
     ok.
 
 %% -----------------------------------------------------------------------
-%% @doc 
+%% @doc
 map() ->
     gen_server:cast(cluster, print_network).
 
@@ -156,9 +132,8 @@ map_elements(Fun, Element) ->
     Fun(Element),
     map_elements(Fun, ets:next(network, Element)).
 
-         
 %% -----------------------------------------------------------------------
-%% @doc 
+%% @doc
 %-spec write_graph() -> any().
 write_graph() ->
     {ok, FH} = file:open("graph.dot", [write]),
@@ -171,11 +146,11 @@ write_graph() ->
 
 
 %% -----------------------------------------------------------------------
-%% @doc 
+%% @doc
 %-spec strip_call() -> any().
 strip_call(String) ->
     string:substr(hd(string:tokens(String, ":")), 2).
-    
+
 %% @hidden
 strip_call_test_() -> [
     ?_assertEqual(strip_call("1SP5IT:87.205.147.218"), "SP5IT")
@@ -183,13 +158,43 @@ strip_call_test_() -> [
 
 
 %% -----------------------------------------------------------------------
-%% @doc 
--spec nodep(string()) -> boolean().
-nodep(String) ->
+%% @doc
+-spec node_p(string()) -> boolean().
+node_p(String) ->
     Bitstring = list_to_bitstring(String),
     case Bitstring of
         <<"3", _/binary>> -> true;
         <<"5", _/binary>> -> true;
         _ -> false
     end.
-    
+
+sha_hash(Term) ->
+    <<Hash:160/integer>> = crypto:sha(string:to_upper(Term)),
+    lists:flatten(io_lib:format("~40.16.0b", [Hash])).
+
+%% -----------------------------------------------------------------------
+%% @doc Convert a spot record to JSON structure for couchbeam.
+%% Output is not a stringified JSON representation, but rather a data
+%% structure suitable for passing to couchbeam:save_doc.
+%%
+%% SOURCE is the call of the peer from which we received the spot
+%% (not the originating node); this is not currently used but is
+%% reserved for future tracking.
+spot_to_json(#spot{spotted_call = SpottedCall,
+                   spotter_call = SpotterCall,
+                   comment      = Comment,
+                   time         = Time,
+                   date         = Date,
+                   qrg          = Qrg},
+             _Source) ->
+    IsoDateTime = utils:cluster_dt_to_iso(Date, Time),
+    UComment    = unicode:characters_to_binary(Comment),
+    Hash        = sha_hash( [IsoDateTime, SpottedCall,
+                             SpotterCall, Qrg, UComment ]),
+    {[{<<"_id">>,          list_to_bitstring(Hash)},
+      {<<"spotted_call">>, list_to_bitstring(SpottedCall)},
+      {<<"spotter_call">>, list_to_bitstring(SpotterCall)},
+      {<<"comment">>,      UComment },
+      {<<"datetime">>,     list_to_bitstring(IsoDateTime)},
+      {<<"qrg">>,          list_to_bitstring(Qrg)},
+      {<<"source">>,       <<"cluster">>}]}.

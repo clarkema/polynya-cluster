@@ -32,13 +32,13 @@
 
 %% =======================================================================
 %% Module Exports
--export([start_link/0]).
+-export([start_link/1]).
 
 %% =======================================================================
 %% Behaviour API
 
 %% @private
-init({cluster, LocalNode, RemoteNode, Host, Port}) ->
+init({peer, LocalNode, RemoteNode, _Password, Host, Port}) ->
     case gen_tcp:connect(Host, Port, [list, inet, {packet, raw}], 3000) of
         {ok, _Socket} ->
             {ok, #state{localNode=LocalNode,
@@ -52,11 +52,6 @@ init({cluster, LocalNode, RemoteNode, Host, Port}) ->
     end.
 
 %% @private
-%handle_call(_Request, _From, State) ->
-    %{noreply, State}.
-handle_call({hi, there}, _From, #state{localNode=F} = State) ->
-    Reply = {sup, from, F},
-    {reply, Reply, State};
 handle_call({disconnect}, _From, State) ->
     {noreply, State};
 handle_call(_Request, _From, State) ->
@@ -75,16 +70,13 @@ handle_info({tcp, Socket, Data}, #state{link=connected, pending=Pending} = State
         "\r\n" ->
             %% We've got at least one complete sentence; go forth
             %% and process.
-            io:format("Complete: ~p~n", [Data]),
-            [ process_cluster_data(Socket, D) || D <- string:tokens(Pending ++ Data, "\r\n") ],
+            [ process_cluster_data(Socket, D, State) || D <- string:tokens(Pending ++ Data, "\r\n") ],
             {noreply, State#state{pending=""}};
         _ ->
             %% We have at least one incomplete sentence.  Split the input,
             %% process everything but the last item, and add the last one to the pending queue.
-            io:format("Incomplete: ~p~n", [Data]),
             [H|T] = lists:reverse(string:tokens(Pending ++ Data, "\r\n")),
-            [ process_cluster_data(Socket, D) || D <- lists:reverse(T) ],
-            io:format("Waiting on rest of ~p~n", [H]),
+            [ process_cluster_data(Socket, D, State) || D <- lists:reverse(T) ],
             {noreply, State#state{pending=H}}
     end;
 handle_info(Info, State) ->
@@ -103,8 +95,8 @@ code_change(_OldVsn, State, _Extra) ->
 %% =======================================================================
 %% Module API
 
-start_link() ->
-    gen_server:start_link(?MODULE, {cluster, "M0PRL-5", "GB7MBC", "gb7mbc.net", 8000}, []).
+start_link({peer, _LocalCall, _RemoteCall, _Pass, _Host, _Port}=Peer) ->
+    gen_server:start_link(?MODULE, Peer, []).
 
 %% -----------------------------------------------------------------------
 %% @doc Connect to a remote DX Spider node.
@@ -126,29 +118,28 @@ start_link() ->
 %% ready to exchange spots.
 -spec process_connection(any(), string(), #state{}) -> #state{}.
 process_connection(_Socket, [], State) ->
-    State; 
+    State;
 process_connection(Socket, [Line|Rest], State) ->
     process_connection(Socket, Rest, process_line(Socket, Line, State)).
 
 %% -----------------------------------------------------------------------
-%% @doc 
+%% @doc
 %-spec process_line() -> any().
 process_line(_Socket, [], State) -> State;
-process_line(Socket, Line, State) ->
+process_line(Socket, Line, #state{remoteNode=RemoteNode, localNode=LocalNode}=State) ->
     Bitstring = list_to_bitstring(Line),
-    io:format("DReceived: ~p~n", [Bitstring]),
     case Bitstring of
         <<"login:", _/binary>> ->
-            gen_tcp:send(Socket, "m0prl-5\r\n"),
+            gen_tcp:send(Socket, LocalNode ++ "\r\n"),
             State;
         <<"PC18", _/binary>> ->
             %% Login succeeded, and the node is talking PC protocol to us.
-            send_pc_sentence(Socket, "PC92^M0PRL-5^" ++
-                unique_id_server:get_new_id() ++ "^A^^" ++
-                "5GB7MBC^H99^" ),
-            send_pc_sentence(Socket, "PC92^M0PRL-5^" ++
+            send_pc_sentence(Socket, "PC92^" ++ LocalNode ++ "^" ++
+                unique_id_server:get_new_id() ++ "^A^^5" ++
+                RemoteNode ++"^H99^" ),
+            send_pc_sentence(Socket, "PC92^" ++ LocalNode ++ "^" ++
                 unique_id_server:get_new_id() ++
-                "^K^5M0PRL-5:0.1:0.1^1^1^H99^"),
+                "^K^5" ++ LocalNode ++ ":0.1:0.1^1^1^H99^"),
             send_pc_sentence(Socket, "PC20^"),
             State;
         <<"PC92", _/binary>> ->
@@ -164,32 +155,41 @@ process_line(Socket, Line, State) ->
             process_line(Socket, T, State)
     end.
 
-process_cluster_data(_Socket, []) ->
+process_cluster_data(_Socket, [], _State) ->
     {emptylist};
-process_cluster_data(Socket, Data) ->
+process_cluster_data(Socket, Data, #state{localNode=LocalNode,remoteNode=RemoteNode}=State) ->
     Bitstring = list_to_bitstring(Data),
-    io:format("Received: ~p~n", [Bitstring]),
     case Bitstring of
         <<"PC61", _/binary>> ->
-            process_pc11(Data);
+            process_pc11(Data, State);
         <<"PC11", _/binary>> ->
-            process_pc11(Data);
+            process_pc11(Data, State);
+        <<"PC24", _/binary>> ->
+            %% User presence notifcation
+            ignore;
+        <<"PC41", _/binary>> ->
+            %% Various types of user data (name, location, etc.)
+            ignore;
+        <<"PC50", _/binary>> ->
+            %% Local user count of originating node.
+            ignore;
         <<"PC92", _/binary>> ->
             process_pc92(Data);
         <<"PC93", _/binary>> ->
+            io:format("Announce from ~p: ~p~n", [RemoteNode, Bitstring]),
             {announce, Data};
         <<"PC51", _/binary>> ->
-            send_pc_sentence(Socket, "PC51^GB7MBC^M0PRL-5^0^");
+            send_pc_sentence(Socket, "PC51^" ++ RemoteNode ++ "^" ++ LocalNode ++ "^0^");
         <<"P", _/binary>> ->
+            io:format("Received: ~p ~p ~n", [RemoteNode, Bitstring]),
             {unknown_pc, Data};
         _ ->
             [H|T] = Data,
             io:format("Dropping ~p, trying with ~p~n", [H, T]),
-            process_cluster_data(Socket, T)
+            process_cluster_data(Socket, T, State)
     end.
 
 send_pc_sentence(Socket, Data) ->
-    io:format("Sending: ~p~n", [Data]),
     gen_tcp:send(Socket, Data ++ "\r\n").
 
 %% -----------------------------------------------------------------------
@@ -229,15 +229,17 @@ process_pc92(Data) ->
             ok
     end,
     ok.
-    
+
 %% -----------------------------------------------------------------------
 %% @doc Process an incoming PC11 or PC61 sentence.
 %% See {@link node:parse_pc11/1} for differences between the two types.
--spec process_pc11(string()) -> ok.
-process_pc11(Data) ->
-    process_pc11(Data, fun(X) -> cluster:receive_spot(X) end).
+-spec process_pc11(string(), string()) -> ok.
+process_pc11(Data, #state{remoteNode=RemoteNode}=State) ->
+    process_pc11(Data,
+        fun(X) -> cluster:receive_spot(X, RemoteNode) end,
+        State).
 %% @hidden
-process_pc11(Data, Action) ->
+process_pc11(Data, Action, _State) ->
     try parse_pc11(Data) of
         Spot -> Action(Spot)
     catch
@@ -250,20 +252,20 @@ process_pc11_test_() -> [
     %% Good sentence.
     ?_test(process_pc11("PC11^f^dx^date^time^comment^spotter^src^hops",
                         fun(_) -> ok end)),
-    %% We don't want to die and go through the whole  process of
+    %% We don't want to die and go through the whole process of
     %% reconnecting to the remote node just because we receive a
     %% bad sentence; they should be ignored.
     ?_test(process_pc11("Badness",
                         fun(_) -> ok end))
 ].
-    
+
 %% -----------------------------------------------------------------------
-%% @doc Parse an incoming PC11 or PC61 sentence.  
+%% @doc Parse an incoming PC11 or PC61 sentence.
 %% Both sentence types represent DX spots; the difference is that
 %% PC61 has an extra field representing the user's IP address.
 %%
 %% The fields are as follows:
-%% 
+%%
 %% `"PC11"|Freq|DX|Date|Time|Comment|Spotter|Source Node|Hops'
 %% `"PC61"|Freq|DX|Date|Time|Comment|Spotter|Source Node|Spotter IP|Hops'
 %%
@@ -273,14 +275,16 @@ process_pc11_test_() -> [
 %% @end
 -spec parse_pc11(string()) -> spot().
 parse_pc11(Data) ->
-    case string:tokens(Data, "^") of
+    case lists:map(fun string:strip/1, string:tokens(Data, "^")) of
         [_, Qrg, SpottedCall, Date, Time, Comment, SpotterCall|_] ->
+            %% Remove any SSID from the SpotterCall
+            BareCall = hd(string:tokens(SpotterCall, "-")),
             #spot{spotted_call = SpottedCall,
-                  spotter_call = SpotterCall,
+                  spotter_call = BareCall,
                   comment      = Comment,
                   time         = Time,
                   date         = Date,
-                  qrg          = Qrg};
+                  qrg          = utils:normalise_qrg(Qrg)};
         _ -> throw(bad_parse)
     end.
 
